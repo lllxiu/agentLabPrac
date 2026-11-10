@@ -1,5 +1,6 @@
 package org.example.backend_practice.service;
 
+import org.example.backend_practice.exception.ConversationNotFoundException;
 import org.example.backend_practice.dto.ConversationResponse;
 import org.springframework.stereotype.Service;
 
@@ -27,5 +28,16 @@ public class ConversationService {
 
     public synchronized List<ConversationResponse> list(){
         return List.copyOf(conversations.values());
+    }
+
+
+    /*
+    Map 中有这个会话编号 → 检查通过，继续执行
+    Map 中没有这个编号   → 抛出异常，中止当前流程
+    */
+    public synchronized void requireExist(long conversationId){
+        if(!conversations.containsKey(conversationId)){
+            throw new ConversationNotFoundException(conversationId);
+        }
     }
 }

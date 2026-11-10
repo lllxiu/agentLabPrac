@@ -1,6 +1,6 @@
 package org.example.backend_practice.web;
 
-
+import org.example.backend_practice.exception.ConversationNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
@@ -24,5 +24,14 @@ public class ApiExceptionHandler {
 
         }
         return new ErrorResponse("INVALID_ARGUMENT", message);
+    }
+
+
+
+    //找不到会话返回404
+    @ExceptionHandler(ConversationNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ErrorResponse handleConversationNotFound(ConversationNotFoundException ex){
+        return new ErrorResponse("CONVERSATION_NOT_FOUND", ex.getMessage());
     }
 }
