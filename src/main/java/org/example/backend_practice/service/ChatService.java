@@ -1,5 +1,6 @@
 package org.example.backend_practice.service;
 
+import org.example.backend_practice.ai.ChatGateway;
 import org.example.backend_practice.dto.MessageResponse;
 import org.example.backend_practice.repository.MessageRepository;
 import org.springframework.stereotype.Service;
@@ -73,13 +74,16 @@ public class ChatService {
 
     private final ConversationService conversationService;
     private final MessageRepository messageRepository;
+    private final ChatGateway chatGateway;
 
     public ChatService(
             ConversationService conversationService,
-            MessageRepository messageRepository) {
+            MessageRepository messageRepository,
+            ChatGateway chatGateway) {
 
         this.conversationService = conversationService;
         this.messageRepository = messageRepository;
+        this.chatGateway=chatGateway;
     }
 
     @Transactional
@@ -96,7 +100,7 @@ public class ChatService {
         );
 
         // 3. 生成本地模拟回复。
-        String reply = "收到" + message + "这是本地的模拟回复";
+        String reply = chatGateway.reply(message);
 
         // 4. 保存助手回复。
         messageRepository.save(
