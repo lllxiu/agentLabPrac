@@ -1,0 +1,55 @@
+package org.example.backend_practice.ai;
+
+import org.example.backend_practice.dto.MessageResponse;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.stereotype.Service;
+import org.springframework.ai.chat.messages.Message;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Service
+public class DeepSeekChatGateway implements ChatGateway {
+    private final ChatClient chatClient;
+
+    public DeepSeekChatGateway(ChatClient.Builder builder) {
+        this.chatClient=builder.build();
+    }
+
+
+    @Override
+    public String reply(
+            String message,
+            List<MessageResponse> history
+    ){
+        List<Message> input=new ArrayList<>();
+
+        //发送最近20条历史消息
+        int start = Math.max(0,history.size()-20);
+
+        for(int i=start;i<history.size();i++){
+            MessageResponse item=history.get(i);
+
+            if("user".equals((item.role()))){
+                input.add(new UserMessage(item.content()));
+            } else  if("assistant".equals((item.role()))){
+                input.add(new AssistantMessage(item.content()));
+            }
+        }
+
+        input.add(new UserMessage(message));
+
+        String reply=chatClient.prompt()
+                .system("你是一个有耐心的编程助教，请结合对话上下文回答。")
+                .messages(input)
+                .call()
+                .content();
+
+        if(reply==null||reply.isBlank()){
+            throw new IllegalStateException("模型未有效回答。");
+        }
+        return reply;
+    }
+}
