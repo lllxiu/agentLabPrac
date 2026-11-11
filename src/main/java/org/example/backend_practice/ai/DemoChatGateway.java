@@ -2,6 +2,7 @@ package org.example.backend_practice.ai;
 
 import org.example.backend_practice.dto.MessageResponse;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 
@@ -12,5 +13,11 @@ public class DemoChatGateway  implements ChatGateway{
             String message,
             List<MessageResponse> history){
         return "收到"+message+"这是本地模拟回复";
+    }
+
+    @Override
+    public Flux<String> stream(String messagem,
+                               List<MessageResponse> history){
+        return Flux.just(reply(messagem,history));
     }
 }
