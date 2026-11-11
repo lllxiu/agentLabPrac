@@ -4,7 +4,9 @@ import org.example.backend_practice.ai.ChatGateway;
 import org.example.backend_practice.dto.MessageResponse;
 import org.example.backend_practice.repository.MessageRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -75,39 +77,38 @@ public class ChatService {
     private final ConversationService conversationService;
     private final MessageRepository messageRepository;
     private final ChatGateway chatGateway;
+    private final TransactionTemplate transactions;
 
     public ChatService(
             ConversationService conversationService,
             MessageRepository messageRepository,
-            ChatGateway chatGateway) {
+            ChatGateway chatGateway,
+            PlatformTransactionManager transactionManager
+    ) {
 
         this.conversationService = conversationService;
         this.messageRepository = messageRepository;
         this.chatGateway=chatGateway;
+        this.transactions=new TransactionTemplate(transactionManager);
     }
 
-    @Transactional
     public String reply(long conversationId, String message) {
 
         // 1. 确认会话存在。
         conversationService.requireExist(conversationId);
 
-        // 2. 保存用户消息。
-        messageRepository.save(
-                conversationId,
-                "user",
-                message
-        );
+        // 2. 查询之前历史
+        List<MessageResponse> history=
+                messageRepository.findByConversationId(conversationId);
 
-        // 3. 生成本地模拟回复。
-        String reply = chatGateway.reply(message);
+        // 3.等待模型回复。
+        String reply = chatGateway.reply(message,history);
 
-        // 4. 保存助手回复。
-        messageRepository.save(
-                conversationId,
-                "assistant",
-                reply
-        );
+        // 4. 在同一事务中保存问题和回答。
+        transactions.executeWithoutResult(status->{
+            messageRepository.save(conversationId,"user",message);
+            messageRepository.save(conversationId,"assistant",reply);
+        });
 
         return reply;
     }

@@ -29,7 +29,7 @@ public class ChatController {
                 request.message()
         );
 
-        return new ChatResponse(reply,"demo");
+        return new ChatResponse(reply,"real");
 
     }
 
