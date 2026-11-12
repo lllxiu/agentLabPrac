@@ -58,7 +58,7 @@ public class DeepSeekChatGateway implements ChatGateway {
 
             if("user".equals(item.role())){
                 input.add(new UserMessage(item.content()));
-            }else if("assistant".equals(item.role())){
+            }else if("assistant".equals(item.role())&& "completed".equals(item.status())){
                 input.add(new AssistantMessage(item.content()));
             }
         }

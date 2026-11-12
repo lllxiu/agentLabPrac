@@ -1,10 +1,13 @@
 package org.example.backend_practice.service;
 
+import jakarta.annotation.PreDestroy;
 import org.example.backend_practice.ai.ChatGateway;
 import org.example.backend_practice.dto.MessageResponse;
 import org.example.backend_practice.repository.MessageRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -18,9 +21,13 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 @Service
+@DependsOn("chatDraftRecovery")
 public class ChatStreamService {
 
     private static final Logger log =
@@ -30,8 +37,8 @@ public class ChatStreamService {
     private final MessageRepository messageRepository;
     private final ChatGateway chatGateway;
     private final TransactionTemplate transactions;
+    private final ScheduledExecutorService draftScheduler;
 
-    // 记录本进程中每个会话正在运行的流式请求。
     private final ConcurrentHashMap<Long, RunningChat> active =
             new ConcurrentHashMap<>();
 
@@ -39,11 +46,13 @@ public class ChatStreamService {
             ConversationService conversationService,
             MessageRepository messageRepository,
             ChatGateway chatGateway,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            @Qualifier("chatDraftScheduler") ScheduledExecutorService draftScheduler) {
         this.conversationService = conversationService;
         this.messageRepository = messageRepository;
         this.chatGateway = chatGateway;
         this.transactions = new TransactionTemplate(transactionManager);
+        this.draftScheduler = draftScheduler;
     }
 
     public SseEmitter stream(long conversationId, String message) {
@@ -56,11 +65,28 @@ public class ChatStreamService {
         }
 
         try {
-            // 先登记任务，再读取历史、启动线程。
+            // 历史必须在插入本轮问题之前读取，避免重复发送当前问题。
             run.history = messageRepository.findByConversationId(conversationId);
+
+            run.ids = transactions.execute(tx -> new TurnIds(
+                    messageRepository.insert(
+                            conversationId, "user", message, "completed"),
+                    messageRepository.insert(
+                            conversationId, "assistant", "", "generating")
+            ));
+
             run.worker.start();
             return run.emitter;
         } catch (RuntimeException ex) {
+            // 两次插入失败会一起回滚；已提交但未能启动的草稿标记为失败。
+            if (run.ids != null) {
+                try {
+                    messageRepository.finishDraft(
+                            run.ids.assistantMessageId(), "", "failed");
+                } catch (RuntimeException saveError) {
+                    ex.addSuppressed(saveError);
+                }
+            }
             active.remove(conversationId, run);
             throw ex;
         }
@@ -72,6 +98,14 @@ public class ChatStreamService {
         return run != null && run.requestEnd("stopped");
     }
 
+    @PreDestroy
+    public void shutdown() {
+        active.values().forEach(run -> run.requestEnd("interrupted"));
+    }
+
+    private record TurnIds(long userMessageId, long assistantMessageId) {
+    }
+
     private class RunningChat {
 
         private final long conversationId;
@@ -79,10 +113,17 @@ public class ChatStreamService {
         private final SseEmitter emitter = new SseEmitter(120_000L);
         private final StringBuilder answer = new StringBuilder();
         private final Thread worker;
+
+        // 串行执行草稿 UPDATE 和最终 UPDATE，防止旧草稿覆盖最终结果。
+        private final Object persistenceLock = new Object();
         private List<MessageResponse> history;
+        private TurnIds ids;
+        private ScheduledFuture<?> draftTask;
 
         private volatile String requestedStatus;
         private boolean finishing;
+        private long revision;
+        private long persistedRevision;
 
         RunningChat(long conversationId, String message) {
             this.conversationId = conversationId;
@@ -97,7 +138,6 @@ public class ChatStreamService {
             emitter.onCompletion(() -> requestEnd("disconnected"));
         }
 
-        // 一次运行只接受第一个结束请求；落库开始后不再接受停止。
         synchronized boolean requestEnd(String status) {
             if (finishing || requestedStatus != null) {
                 return false;
@@ -107,25 +147,73 @@ public class ChatStreamService {
             return true;
         }
 
+        private synchronized boolean append(String chunk) {
+            if (requestedStatus != null) {
+                return false;
+            }
+            answer.append(chunk);
+            if (!chunk.isEmpty()) {
+                revision++;
+            }
+            return true;
+        }
+
         private synchronized String chooseStatus(String generatedStatus) {
             finishing = true;
             return requestedStatus == null ? generatedStatus : requestedStatus;
+        }
+
+        private void flushDraft() {
+            try {
+                synchronized (persistenceLock) {
+                    String snapshot;
+                    long snapshotRevision;
+
+                    synchronized (this) {
+                        if (finishing || requestedStatus != null
+                                || revision == persistedRevision) {
+                            return;
+                        }
+                        snapshot = answer.toString();
+                        snapshotRevision = revision;
+                    }
+
+                    messageRepository.updateDraft(
+                            ids.assistantMessageId(), snapshot);
+
+                    synchronized (this) {
+                        persistedRevision = snapshotRevision;
+                    }
+                }
+            } catch (RuntimeException ex) {
+                log.warn("草稿保存失败，conversationId={}", conversationId, ex);
+                requestEnd("failed");
+            }
         }
 
         private void generate() {
             String generatedStatus = "completed";
 
             try {
+                send("meta", Map.of(
+                        "conversationId", conversationId,
+                        "userMessageId", ids.userMessageId(),
+                        "assistantMessageId", ids.assistantMessageId()
+                ));
+
                 if (requestedStatus == null) {
+                    // 与文本到达无关：即使模型暂时停顿，也会保存已有的新内容。
+                    draftTask = draftScheduler.scheduleWithFixedDelay(
+                            this::flushDraft, 1, 1, TimeUnit.SECONDS);
+
                     try (Stream<String> chunks =
                                  chatGateway.stream(message, history).toStream(1)) {
                         Iterator<String> iterator = chunks.iterator();
                         while (iterator.hasNext()) {
-                            if (requestedStatus != null) {
+                            String chunk = iterator.next();
+                            if (!append(chunk)) {
                                 break;
                             }
-                            String chunk = iterator.next();
-                            answer.append(chunk);
                             send("delta", Map.of("content", chunk));
                         }
                     }
@@ -144,30 +232,34 @@ public class ChatStreamService {
                 }
             } finally {
                 String status = chooseStatus(generatedStatus);
-
-                // 停止读取已经完成；清除中断标记后执行最后的 JDBC 保存。
+                if (draftTask != null) {
+                    draftTask.cancel(false);
+                }
                 Thread.interrupted();
                 finish(status);
             }
         }
 
         private void finish(String status) {
+            String content;
+            synchronized (this) {
+                content = answer.toString();
+            }
+
             try {
-                // 单独处理数据库失败，避免把发送失败误报为保存失败。
                 try {
-                    transactions.executeWithoutResult(tx -> {
-                        messageRepository.save(
-                                conversationId, "user", message, "completed");
-                        messageRepository.save(
-                                conversationId, "assistant", answer.toString(), status);
-                    });
+                    synchronized (persistenceLock) {
+                        // 一条 UPDATE 原子地保存最终正文和状态。
+                        messageRepository.finishDraft(
+                                ids.assistantMessageId(), content, status);
+                    }
                 } catch (RuntimeException ex) {
-                    log.error("保存聊天结果失败，conversationId={}", conversationId, ex);
-                    if (!"timeout".equals(status) && !"disconnected".equals(status)) {
+                    log.error("保存最终回答失败，conversationId={}", conversationId, ex);
+                    if (canSendResult(status)) {
                         try {
                             send("error", Map.of(
                                     "code", "SAVE_FAILED",
-                                    "message", "聊天结果保存失败，请查询历史。"
+                                    "message", "最终回答保存失败，请查询已有草稿。"
                             ));
                             emitter.complete();
                         } catch (IOException | RuntimeException sendError) {
@@ -177,30 +269,32 @@ public class ChatStreamService {
                     return;
                 }
 
-                // 提交结束后，允许这个会话开始下一轮。
                 active.remove(conversationId, this);
-
-                // 超时、断线时，客户端连接可能已无法使用。
-                if (!"timeout".equals(status) && !"disconnected".equals(status)) {
+                if (canSendResult(status)) {
                     try {
-                        send("done", Map.of("status", status));
+                        send("done", Map.of(
+                                "status", status,
+                                "assistantMessageId", ids.assistantMessageId()
+                        ));
                         emitter.complete();
                     } catch (IOException | RuntimeException ex) {
                         log.debug("结束事件发送失败，记录已经保存", ex);
                     }
                 }
             } finally {
-                // 只移除当前对象，避免误删后续的新任务。
                 active.remove(conversationId, this);
             }
         }
-        private void send(String event, Map<String, String> data)
-                throws IOException {
+
+        private boolean canSendResult(String status) {
+            return !"timeout".equals(status) && !"disconnected".equals(status);
+        }
+
+        private void send(String event, Map<String, ?> data) throws IOException {
             emitter.send(SseEmitter.event()
                     .name(event)
                     .data(data, MediaType.APPLICATION_JSON));
         }
     }
 }
-
 
