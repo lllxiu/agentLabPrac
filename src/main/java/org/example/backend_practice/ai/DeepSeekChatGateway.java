@@ -51,9 +51,9 @@ public class DeepSeekChatGateway implements ChatGateway {
     private List<Message> buildMessages(String message, List<MessageResponse> history){
         List<Message> input=new ArrayList<>();
 
-        int start =Math.max(9,history.size()-20);
+        int start =Math.max(0,history.size()-20);
 
-        for(int i=start;i<=history.size();i++){
+        for(int i=start;i<history.size();i++){
             MessageResponse item=history.get(i);
 
             if("user".equals(item.role())){
@@ -63,7 +63,7 @@ public class DeepSeekChatGateway implements ChatGateway {
             }
         }
 
-        input.add(new AssistantMessage(message));
+        input.add(new UserMessage(message));
         return input;
     }
 }

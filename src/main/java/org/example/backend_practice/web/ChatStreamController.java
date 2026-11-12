@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/conversations")
 public class ChatStreamController {
@@ -33,4 +35,13 @@ public class ChatStreamController {
         );
     }
 
+    @PostMapping("/{conversationId}/chat/stop")
+    public Map<String, Boolean> stop(
+            @PathVariable("conversationId") long conversationId) {
+
+        return Map.of(
+                "accepted",
+                chatStreamService.stop(conversationId)
+        );
+    }
 }

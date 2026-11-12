@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS practice_messages (
     conversation_id BIGINT NOT NULL,
     role VARCHAR(20) NOT NULL,
     content LONGTEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'completed',
 
     PRIMARY KEY (id),
 

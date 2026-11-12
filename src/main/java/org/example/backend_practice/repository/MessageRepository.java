@@ -15,17 +15,27 @@ public class MessageRepository {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    public void save(long conversationId, String role, String content) {
+    public void save(long conversationId, String role, String content,String status) {
         String sql =
                 "INSERT INTO practice_messages " +
-                        "(conversation_id, role, content) VALUES (?, ?, ?)";
+                        "(conversation_id, role, content,status) VALUES (?, ?, ?,?)";
 
         jdbcTemplate.update(
                 sql,
                 conversationId,
                 role,
-                content
+                content,
+                status
+
         );
+    }
+
+    public void save(
+            long conversationId,
+            String role,
+            String content) {
+
+        save(conversationId, role, content, "completed");
     }
 
     public List<MessageResponse> findByConversationId(
@@ -43,7 +53,8 @@ public class MessageRepository {
                         rs.getLong("id"),
                         rs.getLong("conversation_id"),
                         rs.getString("role"),
-                        rs.getString("content")
+                        rs.getString("content"),
+                        rs.getString("status")
                 ),
                 conversationId
         );

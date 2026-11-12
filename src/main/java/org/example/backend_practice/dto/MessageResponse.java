@@ -5,6 +5,8 @@ public record MessageResponse(
         long id,
         long conversationId,
         String role,
-        String content
+        String content,
+        String status
+
 ) {
 }
