@@ -42,7 +42,7 @@ public class MessageRepository {
             long conversationId) {
 
         String sql =
-                "SELECT id, conversation_id, role, content " +
+                "SELECT id, conversation_id, role, content, status " +
                         "FROM practice_messages " +
                         "WHERE conversation_id = ? " +
                         "ORDER BY id";
